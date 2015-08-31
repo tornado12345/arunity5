@@ -91,12 +91,6 @@ then
         $DIR_WIN/bin/genTexData.exe \
         $DIR_WIN/bin/mk_patt.exe \
         bin/
-    cp -vp \
-        $DIR_WIN/bin/ARvideo.dll \
-        redist/
-    cp -vp \
-        $DIR_WIN/bin64/ARvideo.dll \
-        redist64/
 fi
 
 # Rename version, where appropriate.

@@ -8,16 +8,16 @@
 -   [Notes](#Notes)
 
 ###About this Archive
-This archive contains the ARToolKit for Unity project, plugins, utilities and examples, version 5.2.2r2.
+This archive contains the ARToolKit for Unity project, plugins, utilities and examples, version 5.2.2r3.
 
-ARToolKit for Unity version 5.2.2r2 is released under the GNU Lesser General Public License version 3, with some additional permissions. Example code is generally released under a more permissive disclaimer; please read the file LICENSE.txt for more information.
+ARToolKit for Unity version 5.2.2r3 is released under the GNU Lesser General Public License version 3, with some additional permissions. Example code is generally released under a more permissive disclaimer; please read the file LICENSE.txt for more information.
 
 ARToolKit for Unity is designed to build on Windows, Macintosh OS X, iOS and Android platforms.
 
 ###System Requirements:
 In addition to any base requirements for Unity, the ARToolKit for Unity plugin(s) have the following requirements:
 
--   ARToolKit for Unity 5.2.2 requires Unity Pro v4.5.5f1 or later.
+-   ARToolKit for Unity 5.2.3 requires Unity Pro v4.5.5f1 or later.
 -   If targeting Android, Unity Android Pro is required. Android v2.3 and later is supported.
 -   If targeting iOS, Unity iOS Pro is required. Xcode tools v5.0.1 or later is required. iOS v5.1.1 and later is supported.
 
@@ -31,7 +31,7 @@ ARToolKit v5.2 is the first major release under an open source license in severa
 This archive was assembled by:
     Philip Lamb and Wally Young
     [http://www.artoolkit.org][website]
-    2015-05-15
+    2015-08-31
 
 Copyright 2015 DAQRI LLC
 Copyright 2011-2015 ARToolworks, Inc.

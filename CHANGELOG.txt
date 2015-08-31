@@ -1,6 +1,9 @@
 Release Notes
 -------------
 
+== ARToolKit for Unity v5.2.2r3 ==
+- Updated to ARToolKit v5.2.2, including addition of new threshold mode, "Bracketing".
+
 == ARToolKit for Unity v5.2.2r2 ==
 - src directory for Unity plugin and Android player source.
 - Updated packaging scripts. Bundling is done through shell.
