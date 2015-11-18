@@ -1,46 +1,19 @@
-﻿/*
+/*
  *  ARMarker.cs
  *  ARToolKit for Unity
  *
- *  This file is part of ARToolKit for Unity.
- *
- *  ARToolKit for Unity is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU Lesser General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  ARToolKit for Unity is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU Lesser General Public License for more details.
- *
- *  You should have received a copy of the GNU Lesser General Public License
- *  along with ARToolKit for Unity.  If not, see <http://www.gnu.org/licenses/>.
- *
- *  As a special exception, the copyright holders of this library give you
- *  permission to link this library with independent modules to produce an
- *  executable, regardless of the license terms of these independent modules, and to
- *  copy and distribute the resulting executable under terms of your choice,
- *  provided that you also meet, for each linked independent module, the terms and
- *  conditions of the license of that module. An independent module is a module
- *  which is neither derived from nor based on this library. If you modify this
- *  library, you may extend this exception to your version of the library, but you
- *  are not obligated to do so. If you do not wish to do so, delete this exception
- *  statement from your version.
- *
- *  Copyright 2015 Daqri, LLC.
- *  Copyright 2010-2015 ARToolworks, Inc.
- *
- *  Author(s): Philip Lamb, Julian Looser
+ *  Copyright 2010-2014 ARToolworks, Inc. All rights reserved.
  *
  */
 
 using System;
 using System.Collections.Generic;
+using System.Collections;
 using System.Linq;
 using System.Text;
 using System.IO;
 using UnityEngine;
+using System.Threading;
 
 public enum MarkerType
 {
@@ -61,18 +34,18 @@ public enum ARWMarkerOption : int {
 }
 
 /// <summary>
-/// ARMarker objects represent an ARToolKit marker, even when ARToolKit is not
-/// initialised.
+/// ARMarker objects represent an ARToolKit marker, even when ARToolKit is not initialized.
+/// <para>
 /// To find markers from elsewhere in the Unity environment:
-///   ARMarker[] markers = FindObjectsOfType<ARMarker>(); // (or FindObjectsOfType(typeof(ARMarker)) as ARMarker[]);
-/// 
+/// <c>
+/// ARMarker[] markers = FindObjectsOfType{ARMarker}() (or FindObjectsOfType(typeof(ARMarker)) as ARMarker[]);
+/// </c>
+/// </para>
 /// </summary>
-/// 
 [ExecuteInEditMode]
 public class ARMarker : MonoBehaviour
 {
-
-    public readonly static Dictionary<MarkerType, string> MarkerTypeNames = new Dictionary<MarkerType, string>
+    public static readonly Dictionary<MarkerType, string> MarkerTypeNames = new Dictionary<MarkerType, string>
     {
 		{MarkerType.Square, "Single AR pattern"},
 		{MarkerType.SquareBarcode, "Single AR barcode"},
@@ -88,40 +61,48 @@ public class ARMarker : MonoBehaviour
     // Value used when no underlying ARToolKit marker is assigned
     public const int NO_ID = -1;
 
+    private static readonly Matrix4x4 MatrixTsr90Inverse = Matrix4x4.TRS(
+        Vector3.zero,
+        Quaternion.AngleAxis(90f, Vector3.forward),
+        Vector3.one).inverse;
+    private static readonly Matrix4x4 MatrixTsr270Inverse = Matrix4x4.TRS(
+        Vector3.zero,
+        Quaternion.AngleAxis(90f, Vector3.back),
+        Vector3.one).inverse;
+    private readonly object visibleLock = new object();
+    private readonly object transformMatrixLock = new object();
+
     [NonSerialized]       // UID is not serialized because its value is only meaningful during a specific run.
     public int UID = NO_ID;      // Current Unique Identifier (UID) assigned to this marker.
 
     // Public members get serialized
     public MarkerType MarkerType = MarkerType.Square;
-    public string Tag = "";
+    public string Tag = string.Empty;
 
     // If the marker is single, then it has a filename and a width
 	public int PatternFilenameIndex = 0;
-    public string PatternFilename = "";
-	public string PatternContents = ""; // Set by the editor.
+    public string PatternFilename = string.Empty;
+    public string PatternContents = string.Empty; // Set by the editor.
     public float PatternWidth = 0.08f;
 	
 	// Barcode markers have a user-selected ID.
 	public int BarcodeID = 0;
 	
     // If the marker is multi, it just has a config filename
-    public string MultiConfigFile = "";
+    public string MultiConfigFile = string.Empty;
 	
 	// NFT markers have a dataset pathname (less the extension).
 	// Also, we need a list of the file extensions that make up an NFT dataset.
-	public string NFTDataName = "";
+	public string NFTDataName = string.Empty;
 	#if !UNITY_METRO
-	private readonly string[] NFTDataExts = {"iset", "fset", "fset3"};
+	private readonly string[] NFTDataExts = {"iset", "fset", "fset2"};
 	#endif
 	[NonSerialized]
 	public float NFTWidth; // Once marker is loaded, this holds the width of the marker in Unity units.
 	[NonSerialized]
 	public float NFTHeight; // Once marker is loaded, this holds the height of the marker in Unity units.
 
-    // Single markers have a single pattern, multi markers have one or more, NFT have none.
-	private ARPattern[] patterns;
-
-	// Private fields with accessors.
+    // Private fields with accessors.
 	// Marker configuration options.
 	[SerializeField]
 	private bool currentUseContPoseEstimation = false;						// Single marker only; whether continuous pose estimation should be used.
@@ -136,31 +117,40 @@ public class ARMarker : MonoBehaviour
 
     // Realtime tracking information
     private bool visible = false;                                           // Marker is visible or not
-	private Matrix4x4 transformationMatrix;                                 // Full transformation matrix as a Unity matrix
-//    private Quaternion rotation = new Quaternion(0.0f, 0.0f, 0.0f, 1.0f);   // Rotation corrected for Unity
-//    private Vector3 position = new Vector3(0.0f, 0.0f, 0.0f);               // Position corrected for Unity
-    
+    /// <summary>Full transformation matrix as a Unity matrix.<c>Null if not been set.</c></summary>
+    private Matrix4x4? transformationMatrix;
+    //    private Quaternion rotation = new Quaternion(0.0f, 0.0f, 0.0f, 1.0f);   // Rotation corrected for Unity
+    //    private Vector3 position = new Vector3(0.0f, 0.0f, 0.0f);               // Position corrected for Unity
 
-    // Initialisation.
-	// When Awake() is called, the object is already instantiated and deserialised.
-	// This is the right place to connect to other objects.
-	// However, objects are awoken in random order, so do not assume that any
-	// other object is ready to be communicated with -- it might need to be awoken first.
+    public string markerDirectory = "EasyAnimatorDataSet";
+
+    private ARController arController;
+    private SetCameraParams setCameraParams;
+    private IEnumerator loadEnumerator = null;
+    private bool applicationIsPlaying;
+    private bool isAndroid;
+    private bool isEditor;
+
+    // Initialization.
+    // When Awake() is called, the object is already instantiated and de-serialized.
+    // This is the right place to connect to other objects.
+    // However, objects are awoken in random order, so do not assume that any
+    // other object is ready to be communicated with -- it might need to be awoken first.
     void Awake()
     {
-		//ARController.Log(LogTag + "ARMarker.Awake()");
+        applicationIsPlaying = Application.isPlaying;
+        isAndroid = Application.platform == RuntimePlatform.Android;
+        isEditor = Application.isEditor;
         UID = NO_ID;
     }
 	
 	public void OnEnable()
 	{
-		//ARController.Log(LogTag + "ARMarker.OnEnable()");
-		Load();
-	}
+        applicationIsPlaying = Application.isPlaying;
+    }
 	
 	public void OnDisable()
 	{
-		//ARController.Log(LogTag + "ARMarker.OnDisable()");
 		Unload();
 	}
 
@@ -168,7 +158,7 @@ public class ARMarker : MonoBehaviour
 	private bool unpackStreamingAssetToCacheDir(string basename)
 	{
 		if (!File.Exists(System.IO.Path.Combine(Application.temporaryCachePath, basename))) {
-			string file = System.IO.Path.Combine(Application.streamingAssetsPath, basename); // E.g. "jar:file://" + Application.dataPath + "!/assets/" + basename;
+			string file = System.IO.Path.Combine(Application.streamingAssetsPath + "/" + markerDirectory, basename); // E.g. "jar:file://" + Application.dataPath + "!/assets/" + basename;
 			WWW unpackerWWW = new WWW(file);
 			while (!unpackerWWW.isDone) { } // This will block in the webplayer. TODO: switch to co-routine.
 			if (!string.IsNullOrEmpty(unpackerWWW.error)) {
@@ -181,71 +171,197 @@ public class ARMarker : MonoBehaviour
 	}
 	#endif
 
-	// Load the underlying ARToolKit marker structure(s) and set the UID.
-    public void Load() 
+	public void Load()
+	{
+
+	}
+
+    public void LoadMe(bool useThread, Action<ARMarker> finishedLoadingAction)
     {
-		//ARController.Log(LogTag + "ARMarker.Load()");
-        if (UID != NO_ID) {
-			//ARController.Log(LogTag + "Marker already loaded.");
-			return;
+        if ((arController = ARController.Instance()) == null)
+        {
+            Debug.LogError("Failed to find the ARController when loading.");
+            return;
+        }
+
+        if ((setCameraParams = SetCameraParams.Instance()) == null)
+        {
+            Debug.LogError("Failed to find the SetCameraParams when loading.");
+            return;
+        }
+
+        if (loadEnumerator == null && gameObject.activeSelf)
+        {
+            StartLoad(useThread, finishedLoadingAction);
+        }
+
+        arController.RegisterUpdateEvent(new ARController.UpdateEventObject(UpdateMe, 1));
+    }
+
+    private void StartLoad(bool useThread, Action<ARMarker> finishedLoadingAction)
+	{
+		if (loadEnumerator != null)
+		{
+			StopCoroutine(loadEnumerator);
+			loadEnumerator = null;
 		}
 
-		if (!PluginFunctions.inited) {
-			return;
-		}
+		loadEnumerator = _Load(useThread, finishedLoadingAction);
+		StartCoroutine(loadEnumerator);
+	}
 
-		// Work out the configuration string to pass to ARToolKit.
-        string dir = Application.streamingAssetsPath;
-        string cfg = "";
+    private sealed class ARMarkerLoadingArgs
+    {
+        public readonly string config;
+        public readonly Action finishedCallback;
+
+        public ARMarkerLoadingArgs(string config, Action finishedCallback)
+        {
+            this.config = config;
+            this.finishedCallback = finishedCallback;
+        }
+    }
+
+    private void ArwAddMarker(string config, bool useThread, Action doneAddingAction) {
+		ARMarkerLoadingArgs args = new ARMarkerLoadingArgs(config, doneAddingAction);
+
+		if (useThread)
+		{
+			ThreadPool.QueueUserWorkItem(RunGetArwAddMarker,args);
+		}
+		else
+		{
+			RunGetArwAddMarker (args);
+		}
+	}
+	
+	private void RunGetArwAddMarker(object stateInfo)
+	{
+		ARMarkerLoadingArgs args = stateInfo as ARMarkerLoadingArgs;
+		try {
+            if (args == null) {
+                throw new NullReferenceException("args");
+            }
+
+			int uid = PluginFunctions.arwAddMarker(args.config);
+			UID = uid;
+		} catch (Exception exception) {
+			Debug.LogException(exception);
+		}
 		
-        switch (MarkerType) {
+        if (args != null && args.finishedCallback != null) {
+            args.finishedCallback();
+        }
+	}
+
+    private bool ShouldBeLoading()
+    {
+        if (!applicationIsPlaying)
+        {
+            return false;
+        }
+
+        if (arController == null)
+        {
+            Debug.LogWarning("Lost the ARController when loading.");
+            return false;
+        }
+
+        if (setCameraParams == null)
+        {
+            Debug.LogWarning("Lost the SetCameraParams when loading.");
+            return false;
+        }
+
+        if (UID == NO_ID)
+        {
+            return PluginFunctions.inited;
+        }
+
+        Debug.LogWarning("Marker already loaded.");
+        return false;
+    }
+
+    // Load the underlying ARToolKit marker structure(s) and set the UID.
+    IEnumerator _Load(bool useThread, Action<ARMarker> finishedLoadingAction) 
+    {
+		Action done = () => {
+			loadEnumerator = null;
+			if(finishedLoadingAction != null){
+				finishedLoadingAction(this);
+			}
+		};
+
+        if (!ShouldBeLoading())
+        {
+            done();
+            yield break;
+        }
+
+        // Work out the configuration string to pass to ARToolKit.
+        string dir = string.Format("{0}/{1}", Application.streamingAssetsPath, markerDirectory);
+        string cfg = string.Empty;
+
+		switch (MarkerType) {
 
 			case MarkerType.Square:
-				// Multiply width by 1000 to convert from metres to ARToolKit's millimetres.
-				cfg = "single_buffer;" + PatternWidth*1000.0f + ";buffer=" + PatternContents;
+				// Multiply width by 1000 to convert from metres to ARToolKit's millimeters.
+				cfg = string.Format("single_buffer;{0};buffer={1}", PatternWidth*1000.0f, PatternContents);
 				break;
 			
 			case MarkerType.SquareBarcode:
-				// Multiply width by 1000 to convert from metres to ARToolKit's millimetres.
-				cfg = "single_barcode;" + BarcodeID + ";" + PatternWidth*1000.0f;
+				// Multiply width by 1000 to convert from metres to ARToolKit's millimeters.
+				cfg = string.Format("single_barcode;{0};{1}", BarcodeID, PatternWidth*1000.0f);
 				break;
 			
             case MarkerType.Multimarker:
 				#if !UNITY_METRO
-				if (dir.Contains("://")) {
+				if (dir.Contains("://")) 
+			{
 					// On Android, we need to unpack the StreamingAssets from the .jar file in which
 					// they're archived into the native file system.
 					dir = Application.temporaryCachePath;
-					if (!unpackStreamingAssetToCacheDir(MultiConfigFile)) {
-						dir = "";
-					} else {
-					
-						//string[] unpackFiles = getPatternFiles;
-						//foreach (string patternFile in patternFiles) {
-						//if (!unpackStreamingAssetToCacheDir(patternFile)) {
-						//    dir = "";
-						//    break;
-						//}
+					if (!unpackStreamingAssetToCacheDir(MultiConfigFile))
+					{
+						dir = string.Empty;
+					} 
+					else
+					{
+						//also unpack the .pat files
+						string mrkFileName =  System.IO.Path.Combine(Application.temporaryCachePath,MultiConfigFile);
+						string [] lines = File.ReadAllLines(mrkFileName);
+						foreach( string line in lines )
+						{
+							if(line.Contains(".pat"))
+							{
+								if (!unpackStreamingAssetToCacheDir(line)) {
+								    dir = string.Empty;
+								    break;
+								}
+							}
+						}
+						
 				    }
 				}
 				#endif
 				
 				if (!string.IsNullOrEmpty(dir) && !string.IsNullOrEmpty(MultiConfigFile)) {
-					cfg = "multi;" + System.IO.Path.Combine(dir, MultiConfigFile);
+					cfg = string.Format("multi;{0}", System.IO.Path.Combine(dir, MultiConfigFile));
 				}
                 break;
 
 			
 			case MarkerType.NFT:
 				#if !UNITY_METRO
-				if (dir.Contains("://")) {
+				if (dir.Contains("://")) 
+				{
 					// On Android, we need to unpack the StreamingAssets from the .jar file in which
 					// they're archived into the native file system.
 					dir = Application.temporaryCachePath;
 					foreach (string ext in NFTDataExts) {
-						string basename = NFTDataName + "." + ext;
+						string basename = string.Format("{0}.{1}", NFTDataName, ext);
 						if (!unpackStreamingAssetToCacheDir(basename)) {
-							dir = "";
+							dir = string.Empty;
 							break;
 						}
 					}
@@ -253,101 +369,137 @@ public class ARMarker : MonoBehaviour
 				#endif
 			
 				if (!string.IsNullOrEmpty(dir) && !string.IsNullOrEmpty(NFTDataName)) {
-					cfg = "nft;" + System.IO.Path.Combine(dir, NFTDataName);
+					cfg = string.Format("nft;{0}", System.IO.Path.Combine(dir, NFTDataName));
 				}
 				break;
 
             default:
-                // Unknown marker type?
+                Debug.LogWarningFormat("Unknown marker type \"{0}\"", MarkerType);
                 break;
 
         }
-		
+
 		// If a valid config. could be assembled, get ARToolKit to process it, and assign the resulting ARMarker UID.
-		if (!string.IsNullOrEmpty(cfg)) {
-        	UID = PluginFunctions.arwAddMarker(cfg);
-			if (UID == NO_ID) {
-				ARController.Log(LogTag + "Error loading marker.");
-			} else {
-
-				// Marker loaded. Do any additional configuration.
-				//ARController.Log("Added marker with cfg='" + cfg + "'");
-				
-				if (MarkerType == MarkerType.Square || MarkerType == MarkerType.SquareBarcode) UseContPoseEstimation = currentUseContPoseEstimation;
-				Filtered = currentFiltered;
-				FilterSampleRate = currentFilterSampleRate;
-				FilterCutoffFreq = currentFilterCutoffFreq;
-				if (MarkerType == MarkerType.NFT) NFTScale = currentNFTScale;
-
-				// Retrieve any required information from the configured ARToolKit ARMarker.
-				if (MarkerType == MarkerType.NFT) {
-
-					int imageSizeX, imageSizeY;
-					PluginFunctions.arwGetMarkerPatternConfig(UID, 0, null, out NFTWidth, out NFTHeight, out imageSizeX, out imageSizeY);
-					NFTWidth *= 0.001f;
-					NFTHeight *= 0.001f;
-					//ARController.Log("Got NFTWidth=" + NFTWidth + ", NFTHeight=" + NFTHeight + ".");
-				
-				} else {
-
-       				// Create array of patterns. A single marker will have array length 1.
-					int numPatterns = PluginFunctions.arwGetMarkerPatternCount(UID);
-       				//ARController.Log("Marker with UID=" + UID + " has " + numPatterns + " patterns.");
-        			if (numPatterns > 0) {
-						patterns = new ARPattern[numPatterns];
-			        	for (int i = 0; i < numPatterns; i++) {
-            				patterns[i] = new ARPattern(UID, i);
-        				}
-					}
-
-				}
-			}
+		if (string.IsNullOrEmpty(cfg)) {
+			done();
+			yield break;
 		}
+
+		bool addingMarker = true;
+		ArwAddMarker(cfg, useThread, () => addingMarker = false);
+		
+		while (addingMarker) {
+			yield return null;//new WaitForEndOfFrame();
+		}
+
+		if (UID == NO_ID) {
+			ARController.Log(string.Format("{0}Error loading marker.", LogTag));
+			done();
+			yield break;
+		}
+
+		// Marker loaded. Do any additional configuration.
+		//ARController.Log("Added marker with cfg='" + cfg + "'");
+				
+		if (MarkerType == MarkerType.Square || MarkerType == MarkerType.SquareBarcode) UseContPoseEstimation = currentUseContPoseEstimation;
+		Filtered = currentFiltered;
+		FilterSampleRate = currentFilterSampleRate;
+		FilterCutoffFreq = currentFilterCutoffFreq;
+		if (MarkerType == MarkerType.NFT) NFTScale = currentNFTScale;
+
+		// Retrieve any required information from the configured ARToolKit ARMarker.
+		if (MarkerType == MarkerType.NFT) {
+
+		int imageSizeX, imageSizeY;
+		PluginFunctions.arwGetMarkerPatternConfig(UID, 0, null, out NFTWidth, out NFTHeight, out imageSizeX, out imageSizeY);
+		NFTWidth *= 0.001f;
+		NFTHeight *= 0.001f;
+		//ARController.Log("Got NFTWidth=" + NFTWidth + ", NFTHeight=" + NFTHeight + ".");
+				
+		} else {
+
+       			// Create array of patterns. A single marker will have array length 1.
+				int numPatterns = PluginFunctions.arwGetMarkerPatternCount(UID);
+       			//ARController.Log("Marker with UID=" + UID + " has " + numPatterns + " patterns.");
+        		if (numPatterns > 0) {
+					Patterns = new ARPattern[numPatterns];
+			       	for (int i = 0; i < numPatterns; i++) {
+            			Patterns[i] = new ARPattern(UID, i, MarkerType == MarkerType.Multimarker);
+        			}
+				}
+
+		}
+		done ();
     }
 
 	// We use Update() here, but be aware that unless ARController has been configured to
 	// execute first (Unity Editor->Edit->Project Settings->Script Execution Order) then
 	// state produced by this update may lag by one frame.
-    void Update()
+    void UpdateMe()
     {
-		float[] matrixRawArray = new float[16];
+        if (UID == NO_ID || !PluginFunctions.inited || arController == null || setCameraParams == null)
+        {
+            Visible = false;
+            return;
+        }
 
-		//ARController.Log(LogTag + "ARMarker.Update()");
-		if (UID == NO_ID || !PluginFunctions.inited) {
-            visible = false;
+        if (!applicationIsPlaying)
+        {
             return;
         }
 
 		// Query visibility if we are running in the Player.
-        if (Application.isPlaying) {
+        float[] matrixRawArray = new float[16];
+        Visible = PluginFunctions.arwQueryMarkerTransformation(UID, matrixRawArray);
 
-			visible = PluginFunctions.arwQueryMarkerTransformation(UID, matrixRawArray);
-			//ARController.Log(LogTag + "ARMarker.Update() UID=" + UID + ", visible=" + visible);
-			
-            if (visible) {
-				matrixRawArray[12] *= 0.001f; // Scale the position from ARToolKit units (mm) into Unity units (m).
-				matrixRawArray[13] *= 0.001f;
-				matrixRawArray[14] *= 0.001f;
+		if (Visible) {
+            if (MarkerType != MarkerType.Multimarker)
+            {
+                // Scale the position from ARToolKit units (mm) into Unity units (m).
+                matrixRawArray[12] *= 0.001f;
+                matrixRawArray[13] *= 0.001f;
+                matrixRawArray[14] *= 0.001f;
+            }
 
-				Matrix4x4 matrixRaw = ARUtilityFunctions.MatrixFromFloatArray(matrixRawArray);
-				//ARController.Log("arwQueryMarkerTransformation(" + UID + ") got matrix: [" + Environment.NewLine + matrixRaw.ToString("F3").Trim() + "]");
+            Matrix4x4 matrixRaw = ARUtilityFunctions.MatrixFromFloatArray(matrixRawArray);
 
-				// ARToolKit uses right-hand coordinate system where the marker lies in x-y plane with right in direction of +x,
-				// up in direction of +y, and forward (towards viewer) in direction of +z.
-				// Need to convert to Unity's left-hand coordinate system where marker lies in x-y plane with right in direction of +x,
-				// up in direction of +y, and forward (towards viewer) in direction of -z.
-				transformationMatrix = ARUtilityFunctions.LHMatrixFromRHMatrix(matrixRaw);
-			}
-		}
+            // ARToolKit uses right-hand coordinate system where the marker lies in x-y plane with right in direction of +x,
+            // up in direction of +y, and forward (towards viewer) in direction of +z.
+            // Need to convert to Unity's left-hand coordinate system where marker lies in x-y plane with right in direction of +x,
+            // up in direction of +y, and forward (towards viewer) in direction of -z.
+            Matrix4x4 worldToModelMatrix =
+                ARUtilityFunctions.LHMatrixFromRHMatrix(
+                    matrixRaw,
+                    MarkerType == MarkerType.Multimarker);
+
+            if (MarkerType == MarkerType.Multimarker && arController.ContentRotate90)
+            {
+                if (!setCameraParams.isFront || (isAndroid && !isEditor))
+                {
+                    worldToModelMatrix = MatrixTsr90Inverse * worldToModelMatrix;
+                }
+                else
+                {
+                    worldToModelMatrix = MatrixTsr270Inverse * worldToModelMatrix;
+                }
+            }
+
+            TransformationMatrix = worldToModelMatrix;
+        }
     }
 	
 	// Unload any underlying ARToolKit structures, and clear the UID.
 	public void Unload()
 	{
-		//ARController.Log(LogTag + "ARMarker.Unload()");
-		
+		if (loadEnumerator != null)
+		{
+			StopCoroutine(loadEnumerator);
+			loadEnumerator = null;
+		}
+
+		Visible = false;
+
 		if (UID == NO_ID) {
-			//ARController.Log(LogTag + "Marker already unloaded.");
 			return;
 		}
 		
@@ -358,55 +510,71 @@ public class ARMarker : MonoBehaviour
 
 		UID = NO_ID;
 
-		patterns = null; // Delete the patterns too.
-	}
-	
-    public Matrix4x4 TransformationMatrix
+		Patterns = null; // Delete the patterns too.
+
+		if (arController != null) {
+            arController.UnregisterUpdateEvent(UpdateMe);
+            arController = null;
+        }
+
+        setCameraParams = null;
+    }
+
+    /// <summary>
+    /// Will contain the world-to-model matrix.
+    /// <c>
+    /// Null if not been set.
+    /// </c>
+    /// </summary>
+    public Matrix4x4? TransformationMatrix
     {
         get
-        {                
-            return transformationMatrix;
+        {
+            lock (transformMatrixLock)
+            {
+                return transformationMatrix;
+            }
+        }
+
+        private set
+        {
+            lock (transformMatrixLock)
+            {
+                transformationMatrix = value;
+            }
         }
     }
 
-//    public Vector3 Position
-//    {
-//        get
-//        {
-//            return position;
-//        }
-//    }
-//
-//    public Quaternion Rotation
-//    {
-//        get
-//        {
-//            return rotation;
-//        }
-//    }
-
+    /// <summary>
+    /// Is the marker is visible or not.
+    /// </summary>
     public bool Visible
     {
         get
         {
-            return visible;
+            lock (visibleLock)
+            {
+                return visible;
+            }
         }
-    }
 
-
-    public ARPattern[] Patterns
-    {
-        get
+        private set
         {
-            return patterns;
+            lock (visibleLock)
+            {
+                visible = value;
+            }
         }
     }
+
+    // Single markers have a single pattern, multi markers have one or more, NFT have none.
+    public ARPattern[] Patterns { get; private set; }
 
     public bool Filtered
     {
         get
         {
-			return currentFiltered; // Serialised.
+            return currentFiltered; // Serialized.
         }
 
         set
@@ -422,7 +590,7 @@ public class ARMarker : MonoBehaviour
     {
         get
         {
-			return currentFilterSampleRate; // Serialised.
+            return currentFilterSampleRate; // Serialized.
         }
 
         set
@@ -438,7 +606,7 @@ public class ARMarker : MonoBehaviour
     {
         get
         {
-			return currentFilterCutoffFreq; // Serialised.
+            return currentFilterCutoffFreq; // Serialized.
         }
 
         set
@@ -454,7 +622,7 @@ public class ARMarker : MonoBehaviour
     {
         get
         {
-			return currentUseContPoseEstimation; // Serialised.
+            return currentUseContPoseEstimation; // Serialized.
         }
 
         set
@@ -470,7 +638,7 @@ public class ARMarker : MonoBehaviour
 	{
 		get
 		{
-			return currentNFTScale; // Serialised.
+            return currentNFTScale; // Serialized.
 		}
 		
 		set
@@ -481,6 +649,4 @@ public class ARMarker : MonoBehaviour
 			}
 		}
 	}
-	
-
 }
