@@ -2,36 +2,7 @@
  *  ARControllerEditor.cs
  *  ARToolKit for Unity
  *
- *  This file is part of ARToolKit for Unity.
- *
- *  ARToolKit for Unity is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU Lesser General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  ARToolKit for Unity is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU Lesser General Public License for more details.
- *
- *  You should have received a copy of the GNU Lesser General Public License
- *  along with ARToolKit for Unity.  If not, see <http://www.gnu.org/licenses/>.
- *
- *  As a special exception, the copyright holders of this library give you
- *  permission to link this library with independent modules to produce an
- *  executable, regardless of the license terms of these independent modules, and to
- *  copy and distribute the resulting executable under terms of your choice,
- *  provided that you also meet, for each linked independent module, the terms and
- *  conditions of the license of that module. An independent module is a module
- *  which is neither derived from nor based on this library. If you modify this
- *  library, you may extend this exception to your version of the library, but you
- *  are not obligated to do so. If you do not wish to do so, delete this exception
- *  statement from your version.
- *
- *  Copyright 2015 Daqri, LLC.
- *  Copyright 2010-2015 ARToolworks, Inc.
- *
- *  Author(s): Philip Lamb, Julian Looser
+ *  Copyright 2010-2014 ARToolworks, Inc. All rights reserved.
  *
  */
 
@@ -74,7 +45,6 @@ public class ARControllerEditor : Editor
             arcontroller.videoConfigurationiOS0 = EditorGUILayout.TextField("Video config. (iOS)", arcontroller.videoConfigurationiOS0);
             arcontroller.videoConfigurationAndroid0 = EditorGUILayout.TextField("Video config. (Android)", arcontroller.videoConfigurationAndroid0);
 			arcontroller.videoConfigurationWindowsStore0 = EditorGUILayout.TextField("Video config. (Windows Store)", arcontroller.videoConfigurationWindowsStore0);
-			arcontroller.videoConfigurationLinux0 = EditorGUILayout.TextField("Video config. (Linux)", arcontroller.videoConfigurationLinux0);
 			arcontroller.BackgroundLayer0 = EditorGUILayout.LayerField("Layer", arcontroller.BackgroundLayer0);
 
 			arcontroller.VideoIsStereo = EditorGUILayout.Toggle("Video source is stereo", arcontroller.VideoIsStereo);
@@ -85,7 +55,6 @@ public class ARControllerEditor : Editor
 				arcontroller.videoConfigurationiOS1 = EditorGUILayout.TextField("Video config.(R) (iOS)", arcontroller.videoConfigurationiOS1);
 				arcontroller.videoConfigurationAndroid1 = EditorGUILayout.TextField("Video config.(R) (Android)", arcontroller.videoConfigurationAndroid1);
 				arcontroller.videoConfigurationWindowsStore1 = EditorGUILayout.TextField("Video config.(R) (Windows Store)", arcontroller.videoConfigurationWindowsStore1);
-				arcontroller.videoConfigurationLinux1 = EditorGUILayout.TextField("Video config. (Linux)", arcontroller.videoConfigurationLinux1);
 				arcontroller.BackgroundLayer1 = EditorGUILayout.LayerField("Layer (R)", arcontroller.BackgroundLayer1);
 				arcontroller.transL2RName = EditorGUILayout.TextField("Stereo parameters", arcontroller.transL2RName);
 			}
@@ -115,6 +84,8 @@ public class ARControllerEditor : Editor
 		arcontroller.NearPlane = EditorGUILayout.FloatField("Near plane", arcontroller.NearPlane);
         arcontroller.FarPlane = EditorGUILayout.FloatField("Far plane", arcontroller.FarPlane);
 
+		arcontroller._eventReceiver = (GameObject)EditorGUILayout.ObjectField ("Event Reciever", arcontroller._eventReceiver as UnityEngine.Object, typeof(UnityEngine.Object), true,null);
+
 		EditorGUILayout.Separator();
 
         showThresholdOptions = EditorGUILayout.Foldout(showThresholdOptions, "Threshold Options");
@@ -130,8 +101,8 @@ public class ARControllerEditor : Editor
             // Info about the selected mode
             EditorGUILayout.LabelField("", ARController.ThresholdModeDescriptions[newThreshMode]);
 
-            // Show threshold slider only in manual or bracketing modes.
-			if (newThreshMode == ARController.ARToolKitThresholdMode.Manual || newThreshMode == ARController.ARToolKitThresholdMode.Bracketing) {
+            // Show threshold slider only in manual mode
+            if (newThreshMode == ARController.ARToolKitThresholdMode.Manual || newThreshMode == ARController.ARToolKitThresholdMode.Bracketing) {
 
                 int currentThreshold = arcontroller.VideoThreshold;
                 //int newThreshold = UnityEngine.Mathf.Clamp(EditorGUILayout.IntField("Threshold: ", currentThreshold), 0, 255);
@@ -217,6 +188,9 @@ public class ARControllerEditor : Editor
 			arcontroller.QuitOnEscOrBack = EditorGUILayout.Toggle("Quit on [Esc].", arcontroller.QuitOnEscOrBack);
 			if (arcontroller.QuitOnEscOrBack) EditorGUILayout.HelpBox("The [esc] key (Windows, OS X) or the [Back] button (Android) will quit the app.", MessageType.Info);
 			else EditorGUILayout.HelpBox("The [esc] key (Windows, OS X) or the [Back] button (Android) will be ignored.", MessageType.Info);
+			arcontroller.threadedUpdate = EditorGUILayout.Toggle("Run in LOOM?", arcontroller.threadedUpdate);
+			if (!arcontroller.threadedUpdate) EditorGUILayout.HelpBox("ARController event queue will be handled by Daqri main loom thread", MessageType.Info);
+			else EditorGUILayout.HelpBox("ARController event queue will run standalone in _Update()", MessageType.Info);
 		}
     }
 }
