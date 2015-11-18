@@ -1,187 +1,384 @@
-﻿/*
+/*
  *  ARTrackedObject.cs
  *  ARToolKit for Unity
  *
- *  it under the terms of the GNU Lesser General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  ARToolKit for Unity is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU Lesser General Public License for more details.
- *
- *  You should have received a copy of the GNU Lesser General Public License
- *  along with ARToolKit for Unity.  If not, see <http://www.gnu.org/licenses/>.
- *
- *  As a special exception, the copyright holders of this library give you
- *  permission to link this library with independent modules to produce an
- *  executable, regardless of the license terms of these independent modules, and to
- *  copy and distribute the resulting executable under terms of your choice,
- *  provided that you also meet, for each linked independent module, the terms and
- *  conditions of the license of that module. An independent module is a module
- *  which is neither derived from nor based on this library. If you modify this
- *  library, you may extend this exception to your version of the library, but you
- *  are not obligated to do so. If you do not wish to do so, delete this exception
- *  statement from your version.
- *
- *  Copyright 2015 Daqri, LLC.
- *  Copyright 2010-2015 ARToolworks, Inc.
- *
- *  Author(s): Philip Lamb
+ *  Copyright 2014-2014 ARToolworks, Inc. All rights reserved.
  *
  */
 
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+
+using Daqri.Platform.Utilities;
+
+using SmoothTR;
+
 using UnityEngine;
 
 [RequireComponent(typeof(Transform))]
 [ExecuteInEditMode]
 public class ARTrackedObject : MonoBehaviour
 {
-	private const string LogTag = "ARTrackedObject: ";
+    private AROrigin _origin = null;
+    private ARMarker _marker = null;
 
-	private AROrigin _origin = null;
-	private ARMarker _marker = null;
+    private bool visible = false;               // Current visibility from tracking
+    private float? timeTrackingLost;            // Time when tracking was last lost
+    public float secondsToRemainVisible = 0f;   // How long to remain visible after tracking is lost (to reduce flicker)
 
-	private bool visible = false;					// Current visibility from tracking
-	private float timeTrackingLost = 0;				// Time when tracking was last lost
-	public float secondsToRemainVisible = 0.0f;		// How long to remain visible after tracking is lost (to reduce flicker)
-	private bool visibleOrRemain = false;			// Whether to show the content (based on above variables)
+    private readonly SmoothDampTRMatrix smoothDampTRMatrix = new SmoothDampTRMatrix();
+    /// <summary>
+    /// Used to synchronize _marker and visible.
+    /// </summary>
+    private readonly object markerLock = new object();
 
-	public GameObject eventReceiver;
+    /// <summary>How long to remain visible after tracking is lost (to reduce flicker).</summary>
+    public GameObject eventReceiver;
+    public GameObject extractionEventReceiver;
 
-	// Private fields with accessors.
-	[SerializeField]
-	private string _markerTag = "";					// Unique tag for the marker to get tracking from
-	
-	
-	public string MarkerTag
-	{
-		get
-		{
-			return _markerTag;
-		}
-		
-		set
-		{
-			_markerTag = value;
-			_marker = null;
-		}
-	}
+    [SerializeField]
+    private string _markerTag = string.Empty;
 
-	// Return the marker associated with this component.
-	// Uses cached value if available, otherwise performs a find operation.
-	public virtual ARMarker GetMarker()
-	{
-		if (_marker == null) {
-			// Locate the marker identified by the tag
-			ARMarker[] ms = FindObjectsOfType<ARMarker>();
-			foreach (ARMarker m in ms) {
-				if (m.Tag == _markerTag) {
-					_marker = m;
-					break;
-				}
-			}
-		}
-		return _marker;
-	}
+    [SerializeField]
+    [Euler]
+    private Quaternion additionalRotation = Quaternion.identity;
 
-	// Return the origin associated with this component.
-	// Uses cached value if available, otherwise performs a find operation.
-	public virtual AROrigin GetOrigin()
-	{
-		if (_origin == null) {
-			// Locate the origin in parent.
-			_origin = this.gameObject.GetComponentInParent<AROrigin>(); // Unity v4.5 and later.
-		}
-		return _origin;
-	}
+    private bool applicationIsPlaying;
+    private ARController arController;
+    private bool lastFrameWasVisible;
+    private Transform parent;
 
-	void Start()
-	{
-		//ARController.Log(LogTag + "Start()");
+    /// <summary>
+    /// The tag that will be used to associate this tracked object with an <see cref="ARMarker"/>.
+    /// </summary>
+    public string MarkerTag
+    {
+        get
+        {
+            return _markerTag;
+        }
 
-		if (Application.isPlaying) {
-			// In Player, set initial visibility to not visible.
-			for (int i = 0; i < this.transform.childCount; i++) this.transform.GetChild(i).gameObject.SetActive(false);
-		} else {
-			// In Editor, set initial visibility to visible.
-			for (int i = 0; i < this.transform.childCount; i++) this.transform.GetChild(i).gameObject.SetActive(true);
-		}
-	}
+        set
+        {
+            _markerTag = value;
+            _marker = null;
+        }
+    }
 
-	// Use LateUpdate to be sure the ARMarker has updated before we try and use the transformation.
-	void LateUpdate()
-	{
-		// Local scale is always 1 for now
-		transform.localScale = Vector3.one;
-		
-		// Update tracking if we are running in the Player.
-		if (Application.isPlaying) {
+    private bool IsMultimarker
+    {
+        get
+        {
+            lock (markerLock)
+            {
+                return _marker != null && _marker.MarkerType == MarkerType.Multimarker;
+            }
+        }
+    }
 
-			// Sanity check, make sure we have an AROrigin in parent hierachy.
-			AROrigin origin = GetOrigin();
-			if (origin == null) {
-				//visible = visibleOrRemain = false;
+    private bool IsBase
+    {
+        get
+        {
+            lock (markerLock)
+            {
+                return _origin != null && _origin.GetBaseMarker() == _marker;
+            }
+        }
+    }
 
-			} else {
+    public ARMarker GetMarker()
+    {
+        lock (markerLock)
+        {
+            if (_marker != null)
+            {
+                return _marker;
+            }
 
-				// Sanity check, make sure we have an ARMarker assigned.
-				ARMarker marker = GetMarker();
-				if (marker == null) {
-					//visible = visibleOrRemain = false;
-				} else {
+            ARMarker[] ms = FindObjectsOfType<ARMarker>();
+            foreach (ARMarker m in ms)
+            {
+                if (string.Equals(m.Tag, _markerTag, StringComparison.Ordinal))
+                {
+                    _marker = m;
+                    break;
+                }
+            }
 
-					// Note the current time
-					float timeNow = Time.realtimeSinceStartup;
-					
-					ARMarker baseMarker = origin.GetBaseMarker();
-					if (baseMarker != null && marker.Visible) {
+            return _marker;
+        }
+    }
 
-						if (!visible) {
-							// Marker was hidden but now is visible.
-							visible = visibleOrRemain = true;
-							if (eventReceiver != null) eventReceiver.BroadcastMessage("OnMarkerFound", marker, SendMessageOptions.DontRequireReceiver);
+    /// <summary>
+    /// Utility method used to send the <see cref="GameObject.BroadcastMessage(string, object, SendMessageOptions)"/>.
+    /// This ensures the method is sent the same way each time and only if the <paramref name="receiver"/> is not null.
+    /// Mostly to prevent duplicate code.
+    /// </summary>
+    /// <param name="receiver">Calls the method named <paramref name="methodName"/> on every MonoBehaviour in this game object or any of its children.</param>
+    /// <param name="methodName">Name of the method to call.</param>
+    /// <param name="parameter">Optional parameter to pass to the method <c>(can be any value)</c>.</param>
+    private static void NotifyReceiver(
+        GameObject receiver,
+        string methodName,
+        object parameter)
+    {
+        if (receiver == null)
+        {
+            return;
+        }
 
-							for (int i = 0; i < this.transform.childCount; i++) this.transform.GetChild(i).gameObject.SetActive(true);
-						}
+        receiver.BroadcastMessage(
+            methodName,
+            parameter,
+            SendMessageOptions.DontRequireReceiver);
+    }
 
-                        Matrix4x4 pose;
-                        if (marker == baseMarker) {
-                            // If this marker is the base, no need to take base inverse etc.
-                            pose = origin.transform.localToWorldMatrix;
-                        } else {
-						    pose = (origin.transform.localToWorldMatrix * baseMarker.TransformationMatrix.inverse * marker.TransformationMatrix);
-						}
-						transform.position = ARUtilityFunctions.PositionFromMatrix(pose);
-						transform.rotation = ARUtilityFunctions.QuaternionFromMatrix(pose);
+    private void OnEnable()
+    {
+        try
+        {
+            applicationIsPlaying = Application.isPlaying;
+            if (!applicationIsPlaying)
+            {
+                return;
+            }
 
-						if (eventReceiver != null) eventReceiver.BroadcastMessage("OnMarkerTracked", marker, SendMessageOptions.DontRequireReceiver);
+            if ((_origin = GetComponentInParent<AROrigin>()) == null)
+            {
+                throw new NullReferenceException("_origin");
+            }
 
-					} else {
+            if ((arController = ARController.Instance()) != null)
+            {
+                arController.RegisterUpdateEvent(
+                    new ARController.UpdateEventObject(ProcessARUpdate, 2));
+            }
 
-						if (visible) {
-							// Marker was visible but now is hidden.
-							visible = false;
-							timeTrackingLost = timeNow;
-						}
+            if ((parent = transform.parent) == null)
+            {
+                throw new NullReferenceException("transform.parent");
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            gameObject.SetActive(false);
+        }
+    }
 
-						if (visibleOrRemain && (timeNow - timeTrackingLost >= secondsToRemainVisible)) {
-							visibleOrRemain = false;
-							if (eventReceiver != null) eventReceiver.BroadcastMessage("OnMarkerLost", marker, SendMessageOptions.DontRequireReceiver);
-							for (int i = 0; i < this.transform.childCount; i++) this.transform.GetChild(i).gameObject.SetActive(false);
-						}
-					}
-				} // marker
+    private void OnDisable()
+    {
+        lock (markerLock)
+        {
+            _marker = null;
+        }
 
-			} // origin
-		} // Application.isPlaying
+        if (arController != null)
+        {
+            arController.UnregisterUpdateEvent(ProcessARUpdate);
+            arController = null;
+        }
 
-	}
+        smoothDampTRMatrix.Enabled = false;
+        smoothDampTRMatrix.Reset();
 
+        lastFrameWasVisible = false;
+        timeTrackingLost = null;
+    }
+
+    private void LateUpdate()
+    {
+        if (_origin != null && _origin.Paused)
+        {
+            return;
+        }
+
+        bool markerIsVisible;
+        lock (markerLock)
+        {
+            if (_marker == null)
+            {
+                GetMarker();
+                if (_marker == null)
+                {
+                    return;
+                }
+
+                if (!IsMultimarker)
+                {
+                    if (applicationIsPlaying)
+                    {
+                        // In Player, set initial visibility to not visible.
+                        for (int i = 0; i < transform.childCount; i++)
+                        {
+                            transform.GetChild(i).gameObject.SetActive(false);
+                        }
+                    }
+                    else
+                    {
+                        // In Editor, set initial visibility to visible.
+                        for (int i = 0; i < transform.childCount; i++)
+                        {
+                            transform.GetChild(i).gameObject.SetActive(true);
+                        }
+                    }
+                }
+
+                smoothDampTRMatrix.Reset();
+                smoothDampTRMatrix.Enabled = true;
+
+                return;
+            }
+
+            if (!_marker.TransformationMatrix.HasValue)
+            {
+                return;
+            }
+
+            markerIsVisible = _marker.Visible;
+        }
+
+        if (IsMultimarker)
+        {
+            ProcessVisibleMultimarker(smoothDampTRMatrix.Value);
+        }
+
+        if (markerIsVisible)
+        {
+            ProcessVisible();
+        }
+        else
+        {
+            ProcessNonVisible();
+        }
+    }
+
+    private void ProcessARUpdate()
+    {
+        lock (markerLock)
+        {
+            if (_marker == null)
+            {
+                visible = false;
+                smoothDampTRMatrix.Enabled = false;
+                smoothDampTRMatrix.Reset();
+                return;
+            }
+
+            visible = _marker.Visible;
+            if (!visible || !_marker.TransformationMatrix.HasValue)
+            {
+                return;
+            }
+
+            UpdateMatrix(_marker.TransformationMatrix.Value);
+        }
+    }
+
+    private void ProcessNonVisible()
+    {
+        float timeNow = Time.realtimeSinceStartup;
+        if (lastFrameWasVisible)
+        {
+            lastFrameWasVisible = false;
+            timeTrackingLost = timeNow;
+        }
+
+        if (!timeTrackingLost.HasValue || timeNow - timeTrackingLost.Value < secondsToRemainVisible)
+        {
+            return;
+        }
+
+        timeTrackingLost = null;
+
+        NotifyReceiver(eventReceiver, "OnMarkerLost", _marker);
+        NotifyReceiver(extractionEventReceiver, "OnMarkerLostStopExtraction", gameObject);
+
+        if (IsMultimarker)
+        {
+            return;
+        }
+
+        for (int i = 0; i < transform.childCount; i++)
+        {
+            transform.GetChild(i).gameObject.SetActive(false);
+        }
+    }
+
+    private void ProcessVisible()
+    {
+        timeTrackingLost = null;
+
+        if (!lastFrameWasVisible)
+        {
+            lastFrameWasVisible = true;
+            NotifyReceiver(eventReceiver, "OnMarkerFound", _marker);
+            NotifyReceiver(extractionEventReceiver, "OnMarkerFoundSetUpExtraction", gameObject);
+        }
+
+        if (!IsMultimarker)
+        {
+            ProcessVisibleOriginal();
+        }
+
+        NotifyReceiver(eventReceiver, "OnMarkerTracked", _marker);
+        NotifyReceiver(extractionEventReceiver, "OnMarkerTrackedForExtraction", gameObject);
+    }
+
+    private void ProcessVisibleOriginal()
+    {
+        if (IsBase)
+        {
+            transform.rotation = _origin.transform.rotation;
+            transform.position = _origin.transform.position;
+        }
+        else
+        {
+            Matrix4x4? baseTransformationMatrix;
+            Matrix4x4? markerTransformationMatrix;
+            if (!(baseTransformationMatrix = _origin.GetBaseMarker().TransformationMatrix).HasValue ||
+                !(markerTransformationMatrix = _marker.TransformationMatrix).HasValue)
+            {
+                return;
+            }
+
+            Matrix4x4 pose = _origin.transform.localToWorldMatrix *
+                             baseTransformationMatrix.Value.inverse *
+                             markerTransformationMatrix.Value;
+            transform.position = ARUtilityFunctions.PositionFromMatrix(pose);
+            transform.rotation = ARUtilityFunctions.QuaternionFromMatrix(pose);
+        }
+    }
+
+    private void ProcessVisibleMultimarker(TRMatrix updatedTarget)
+    {
+        transform.localScale = Vector3.one;
+
+        if (updatedTarget == null)
+        {
+            return;
+        }
+
+        if (updatedTarget.Rotation.HasValue)
+        {
+            transform.localRotation = Quaternion.Slerp(
+                transform.localRotation,
+                Quaternion.Slerp(
+                    updatedTarget.Rotation.Value,
+                    Quaternion.Inverse(parent.rotation) * updatedTarget.Rotation.Value,
+                    1f) * additionalRotation,
+                1f);
+        }
+
+        if (updatedTarget.Position.HasValue)
+        {
+            transform.localPosition =
+                parent.InverseTransformPoint(updatedTarget.Position.Value);
+        }
+    }
+
+    private void UpdateMatrix(Matrix4x4 transformationMatrix)
+    {
+        smoothDampTRMatrix.SmoothDampRotationFromMatrix(transformationMatrix);
+    }
 }
-

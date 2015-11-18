@@ -1,37 +1,8 @@
-﻿/*
+/*
  *  ARUtilityFunctions.cs
  *  ARToolKit for Unity
  *
- *  This file is part of ARToolKit for Unity.
- *
- *  ARToolKit for Unity is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU Lesser General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  ARToolKit for Unity is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU Lesser General Public License for more details.
- *
- *  You should have received a copy of the GNU Lesser General Public License
- *  along with ARToolKit for Unity.  If not, see <http://www.gnu.org/licenses/>.
- *
- *  As a special exception, the copyright holders of this library give you
- *  permission to link this library with independent modules to produce an
- *  executable, regardless of the license terms of these independent modules, and to
- *  copy and distribute the resulting executable under terms of your choice,
- *  provided that you also meet, for each linked independent module, the terms and
- *  conditions of the license of that module. An independent module is a module
- *  which is neither derived from nor based on this library. If you modify this
- *  library, you may extend this exception to your version of the library, but you
- *  are not obligated to do so. If you do not wish to do so, delete this exception
- *  statement from your version.
- *
- *  Copyright 2015 Daqri, LLC.
- *  Copyright 2010-2015 ARToolworks, Inc.
- *
- *  Author(s): Julian Looser, Philip Lamb
+ *  Copyright 2010-2014 ARToolworks, Inc. All rights reserved.
  *
  */
 
@@ -106,40 +77,59 @@ public static class ARUtilityFunctions
 	    return m.GetColumn(3);
 	}
 
-	// Convert from right-hand coordinate system with <normal vector> in direction of +x,
-	// <orthorgonal vector> in direction of +y, and <approach vector> in direction of +z,
-	// to Unity's left-hand coordinate system with <normal vector> in direction of +x,
-	// <orthorgonal vector> in direction of +y, and <approach vector> in direction of +z.
-	// This is equivalent to negating row 2, and then negating column 2.
-	public static Matrix4x4 LHMatrixFromRHMatrix(Matrix4x4 rhm)
+	public static Vector3 ScaleFromMatrix(Matrix4x4 m)
 	{
-		Matrix4x4 lhm = new Matrix4x4();;
-
-		// Column 0.
-		lhm[0, 0] =  rhm[0, 0];
-		lhm[1, 0] =  rhm[1, 0];
-		lhm[2, 0] = -rhm[2, 0];
-		lhm[3, 0] =  rhm[3, 0];
-		
-		// Column 1.
-		lhm[0, 1] =  rhm[0, 1];
-		lhm[1, 1] =  rhm[1, 1];
-		lhm[2, 1] = -rhm[2, 1];
-		lhm[3, 1] =  rhm[3, 1];
-		
-		// Column 2.
-		lhm[0, 2] = -rhm[0, 2];
-		lhm[1, 2] = -rhm[1, 2];
-		lhm[2, 2] =  rhm[2, 2];
-		lhm[3, 2] = -rhm[3, 2];
-		
-		// Column 3.
-		lhm[0, 3] =  rhm[0, 3];
-		lhm[1, 3] =  rhm[1, 3];
-		lhm[2, 3] = -rhm[2, 3];
-		lhm[3, 3] =  rhm[3, 3];
-
-		return lhm;
+		return new Vector3 (m.GetColumn (0).magnitude, m.GetColumn (1).magnitude, m.GetColumn (2).magnitude);
 	}
 
+    // Convert from right-hand coordinate system with <normal vector> in direction of +x,
+    // <orthogonal vector> in direction of +y, and <approach vector> in direction of +z,
+    // to Unity's left-hand coordinate system with <normal vector> in direction of +x,
+    // <orthogonal vector> in direction of +y, and <approach vector> in direction of +z.
+    // This is equivalent to negating row 2, and then negating column 2.
+    public static Matrix4x4 LHMatrixFromRHMatrix(Matrix4x4 rhm, bool useNew)
+	{
+        if (useNew)
+        {
+            return new Matrix4x4
+            {
+                m00 = rhm.m00,
+                m01 = rhm.m01,
+                m02 = rhm.m02,
+                m03 = rhm.m03,
+                m10 = rhm.m10,
+                m11 = rhm.m11,
+                m12 = rhm.m12,
+                m13 = rhm.m13,
+                m20 = -rhm.m20,
+                m21 = -rhm.m21,
+                m22 = -rhm.m22,
+                m23 = -rhm.m23,
+                m30 = rhm.m30,
+                m31 = rhm.m31,
+                m32 = -rhm.m32,
+                m33 = rhm.m33
+            };
+        }
+
+        return new Matrix4x4
+        {
+            m00 = rhm.m00,
+            m01 = rhm.m01,
+            m02 = -rhm.m02,
+            m03 = rhm.m03,
+            m10 = rhm.m10,
+            m11 = rhm.m11,
+            m12 = -rhm.m12,
+            m13 = rhm.m13,
+            m20 = -rhm.m20,
+            m21 = -rhm.m21,
+            m22 = rhm.m22,
+            m23 = -rhm.m23,
+            m30 = rhm.m30,
+            m31 = rhm.m31,
+            m32 = -rhm.m32,
+            m33 = rhm.m33
+        };
+    }
 }

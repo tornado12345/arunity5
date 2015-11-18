@@ -2,43 +2,12 @@
  *  ARCamera.cs
  *  ARToolKit for Unity
  *
- *  This file is part of ARToolKit for Unity.
- *
- *  ARToolKit for Unity is free software: you can redistribute it and/or modify
- *  it under the terms of the GNU Lesser General Public License as published by
- *  the Free Software Foundation, either version 3 of the License, or
- *  (at your option) any later version.
- *
- *  ARToolKit for Unity is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU Lesser General Public License for more details.
- *
- *  You should have received a copy of the GNU Lesser General Public License
- *  along with ARToolKit for Unity.  If not, see <http://www.gnu.org/licenses/>.
- *
- *  As a special exception, the copyright holders of this library give you
- *  permission to link this library with independent modules to produce an
- *  executable, regardless of the license terms of these independent modules, and to
- *  copy and distribute the resulting executable under terms of your choice,
- *  provided that you also meet, for each linked independent module, the terms and
- *  conditions of the license of that module. An independent module is a module
- *  which is neither derived from nor based on this library. If you modify this
- *  library, you may extend this exception to your version of the library, but you
- *  are not obligated to do so. If you do not wish to do so, delete this exception
- *  statement from your version.
- *
- *  Copyright 2015 Daqri, LLC.
- *  Copyright 2010-2015 ARToolworks, Inc.
- *
- *  Author(s): Philip Lamb, Julian Looser
+ *  Copyright 2010-2014 ARToolworks, Inc. All rights reserved.
  *
  */
 
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+
 using UnityEngine;
 
 /// <summary>
@@ -46,23 +15,26 @@ using UnityEngine;
 /// 
 /// To get a list of foreground Camera objects, do:
 ///
-///     List<Camera> foregroundCameras = new List<Camera>();
-///     ARCamera[] arCameras = FindObjectsOfType<ARCamera>(); // (or FindObjectsOfType(typeof(ARCamera)) as ARCamera[])
+///     List{Camera} foregroundCameras = new List{Camera}();
+///     ARCamera[] arCameras = FindObjectsOfType{ARCamera}(); // (or FindObjectsOfType(typeof(ARCamera)) as ARCamera[])
 ///     foreach (ARCamera arc in arCameras) {
 ///         foregroundCameras.Add(arc.gameObject.camera);
 ///     }
 /// </summary>
-/// 
 [RequireComponent(typeof(Transform))]   // A Transform is required to update the position and orientation from tracking
 [ExecuteInEditMode]                     // Run in the editor so we can keep the scale at 1
 public class ARCamera : MonoBehaviour
 {
 	private const string LogTag = "ARCamera: ";
+    private static readonly Matrix4x4 TsrMatrixRotZNeg180 = Matrix4x4.TRS(
+                                    Vector3.zero,
+                                    Quaternion.AngleAxis(180.0f, Vector3.back),
+                                    Vector3.one);
 	
 	public enum ViewEye
 	{
 		Left = 1,
-		Right = 2,
+		Right = 2
 	}
 	
 	/*public enum STEREO_DISPLAY_MODE {
@@ -97,6 +69,9 @@ public class ARCamera : MonoBehaviour
 	
 	public GameObject eventReceiver;
 	
+    private readonly object updateQueuedLock = new object();
+    private bool updateQueued;
+
 	// Stereo settings.
 	public bool Stereo = false;
 	public ViewEye StereoEye = ViewEye.Left;
@@ -108,10 +83,39 @@ public class ARCamera : MonoBehaviour
 	public string OpticalParamsFilename = "";
 	public byte[] OpticalParamsFileContents = new byte[0]; // Set by the Editor.
 	public float OpticalEyeLateralOffsetRight = 0.0f;
+    [SerializeField]
+    private bool multiMarker;
 	private Matrix4x4 opticalViewMatrix; // This transform expresses the position and orientation of the physical camera in eye coordinates.
-	
+    private bool applicationIsPlaying;
+    private ARController arController;
 
-	public bool SetupCamera(float nearClipPlane, float farClipPlane, Matrix4x4 projectionMatrix, ref bool opticalOut)
+    private void OnEnable()
+    {
+        applicationIsPlaying = Application.isPlaying;
+    }
+
+    void Start()
+	{
+        // Saving off the ARController instance that this registered to for quick access
+        // later as well as ensuring that when this un-registers, it does so on the same
+        // one that it was registered to.
+        if ((arController = ARController.Instance()) != null)
+        {
+            arController.RegisterUpdateEvent(new ARController.UpdateEventObject(LateUpdateMe, 2));
+		}
+	}
+
+    void OnDestroy()
+    {
+        if (arController != null)
+        {
+            arController.UnregisterUpdateEvent(LateUpdateMe);
+        }
+
+        arController = null;
+    }
+
+    public bool SetupCamera(float nearClipPlane, float farClipPlane, Matrix4x4 projectionMatrix, ref bool opticalOut)
 	{
 		Camera c = this.gameObject.GetComponent<Camera>();
 		
@@ -131,20 +135,20 @@ public class ARCamera : MonoBehaviour
 			float[] p = new float[16];
 			opticalSetupOK = PluginFunctions.arwLoadOpticalParams(null, OpticalParamsFileContents, OpticalParamsFileContents.Length, out fovy, out aspect, m, p);
 			if (!opticalSetupOK) {
-				ARController.Log(LogTag + "Error loading optical parameters.");
+				ARController.Log(string.Format("{0}Error loading optical parameters.", LogTag));
 				return false;
 			}
 			m[12] *= 0.001f;
 			m[13] *= 0.001f;
 			m[14] *= 0.001f;
-			ARController.Log(LogTag + "Optical parameters: fovy=" + fovy  + ", aspect=" + aspect + ", camera position (m)={" + m[12].ToString("F3") + ", " + m[13].ToString("F3") + ", " + m[14].ToString("F3") + "}");
+			ARController.Log(string.Format("{0}Optical parameters: fovy={1}, aspect={2}, camera position (m)={{{3}, {4}, {5}}}", LogTag, fovy, aspect, m[12].ToString("F3"), m[13].ToString("F3"), m[14].ToString("F3")));
 			
 			c.projectionMatrix = ARUtilityFunctions.MatrixFromFloatArray(p);
 			
 			opticalViewMatrix = ARUtilityFunctions.MatrixFromFloatArray(m);
-			if (OpticalEyeLateralOffsetRight != 0.0f) opticalViewMatrix = Matrix4x4.TRS(new Vector3(-OpticalEyeLateralOffsetRight, 0.0f, 0.0f), Quaternion.identity, Vector3.one) * opticalViewMatrix; 
+			if (Math.Abs(OpticalEyeLateralOffsetRight) > float.Epsilon) opticalViewMatrix = Matrix4x4.TRS(new Vector3(-OpticalEyeLateralOffsetRight, 0.0f, 0.0f), Quaternion.identity, Vector3.one) * opticalViewMatrix; 
 			// Convert to left-hand matrix.
-			opticalViewMatrix = ARUtilityFunctions.LHMatrixFromRHMatrix(opticalViewMatrix);
+			opticalViewMatrix = ARUtilityFunctions.LHMatrixFromRHMatrix(opticalViewMatrix, multiMarker);
 			
 			opticalOut = true;
 		} else {
@@ -200,14 +204,24 @@ public class ARCamera : MonoBehaviour
 		} else {
 			
 			if (marker.Visible) {
-				
+                if (marker.TransformationMatrix.HasValue) {
 				Matrix4x4 pose;
 				if (Optical && opticalSetupOK) {
-					pose = (opticalViewMatrix * marker.TransformationMatrix).inverse;
+                        pose =
+                            (opticalViewMatrix * marker.TransformationMatrix.Value)
+                                .inverse;
 				} else {
-					pose = marker.TransformationMatrix.inverse;
+					ScreenOrientation orientation = SetCameraParams.Instance ().Orientation ();
+					if ( orientation == ScreenOrientation.PortraitUpsideDown || orientation == ScreenOrientation.LandscapeRight) 
+					{
+                            pose = (TsrMatrixRotZNeg180 * marker.TransformationMatrix.Value).inverse;
+					}
+					else 
+					{
+                            pose = marker.TransformationMatrix.Value.inverse;
+					}
 				}
-				
+
 				arPosition = ARUtilityFunctions.PositionFromMatrix(pose);
 				// Camera orientation: In ARToolKit, zero rotation of the camera corresponds to looking vertically down on a marker
 				// lying flat on the ground. In Unity however, if we still treat markers as being flat on the ground, we clash with Unity's
@@ -220,6 +234,7 @@ public class ARCamera : MonoBehaviour
 					// Marker was hidden but now is visible.
 					arVisible = true;
 				}
+                }
 			} else {
 				if (arVisible) {
 					// Marker was visible but now is hidden.
@@ -239,17 +254,43 @@ public class ARCamera : MonoBehaviour
 	}
 	
 	// Use LateUpdate to be sure the ARMarker has updated before we try and use the transformation.
-	public void LateUpdate()
+    private void LateUpdateMe()
+    {
+        lock (updateQueuedLock)
 	{
+            if (updateQueued)
+            {
+                // Make sure only one happens per frame.
+                return;
+            }
+        }
+
+        if (arController == null)
+        {
+            return;
+        }
+
+        arController.QueueOnMainThread(DoUpdate);
+    }
+
+    private void DoUpdate()
+    {
+        lock (updateQueuedLock)
+        {
+            updateQueued = false;
+        }
+
+        // Update tracking if we are running in Player.
+        if (!applicationIsPlaying)
+        {
+            return;
+        }
+
 		// Local scale is always 1 for now
 		transform.localScale = Vector3.one;
 		
-		// Update tracking if we are running in Player.
-		if (Application.isPlaying) {
-			UpdateTracking();
-			ApplyTracking();
-		}
+		UpdateTracking();
+		ApplyTracking();
 	}
-	
 }
 
