@@ -772,6 +772,7 @@ public class ARController : MonoBehaviour
         if ( Screen.orientation != deviceOrientation )
             UpdateVideoTexture();
 #elif UNITY_ANDROID
+        // note: Android devices update Screen.orientation the frame before adjusting Screen.width/Screen.height
         if ( ( Screen.width != screenWidth ) || ( Screen.height != screenHeight ) )
             UpdateVideoTexture();
         else if ( Screen.orientation != deviceOrientation )
@@ -848,6 +849,8 @@ public class ARController : MonoBehaviour
         screenHeight = Screen.height;
 #endif
 
+        // calculate device rotation matrix and associated background camera transform
+        // note: background camera rotates in opposite direction to counteract physical orientation
         switch ( deviceOrientation )
         {
 
@@ -880,6 +883,7 @@ public class ARController : MonoBehaviour
 
         _videoBackgroundCamera0.pixelRect = getViewport(_videoWidth0, _videoHeight0, false, ARCamera.ViewEye.Left);
 
+        // rotate each tracked AR object camera based on current device orientation
         ARCamera[] list = FindObjectsOfType<ARCamera>();
         foreach (ARCamera item in list)
         {
@@ -1559,6 +1563,7 @@ public class ARController : MonoBehaviour
                     float scaleRatioWidth, scaleRatioHeight, scaleRatio;
 #if !UNITY_EDITOR
 #if UNITY_IOS || UNITY_ANDROID
+                    // alter viewport width and height to match portrait/landscape orientation
                     if ( ( deviceOrientation == ScreenOrientation.Portrait ) || ( deviceOrientation == ScreenOrientation.PortraitUpsideDown ) )
                     {
                         contentWidthFinalOrientation = Math.Min(contentWidth, contentHeight);
