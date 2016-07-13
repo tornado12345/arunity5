@@ -842,6 +842,12 @@ public class ARController : MonoBehaviour
     public void UpdateVideoTexture()
     {
 
+        // device rotation is illogical with a stereo device
+        if ( VideoIsStereo )
+        {
+            return;
+        }
+
 #if !UNITY_EDITOR
         deviceOrientation = Screen.orientation;
 #if UNITY_ANDROID
