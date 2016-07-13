@@ -769,14 +769,17 @@ public class ARController : MonoBehaviour
         } // !sceneConfiguredForVideo
 
 #if UNITY_IOS
-        if ( Screen.orientation != deviceOrientation )
+        if ( Screen.orientation != deviceOrientation ) {
             UpdateVideoTexture();
+        }
 #elif UNITY_ANDROID
         // note: Android devices update Screen.orientation the frame before adjusting Screen.width/Screen.height
-        if ( ( Screen.width != screenWidth ) || ( Screen.height != screenHeight ) )
+        if ( ( Screen.width != screenWidth ) || ( Screen.height != screenHeight ) ) {
             UpdateVideoTexture();
-        else if ( Screen.orientation != deviceOrientation )
+        }
+        else if ( Screen.orientation != deviceOrientation ) {
             screenWidth = screenHeight = 0;  //force video texture update on next pass
+        }
 #endif
 
         bool gotFrame = PluginFunctions.arwCapture();
@@ -843,8 +846,7 @@ public class ARController : MonoBehaviour
     {
 
         // device rotation is illogical with a stereo device
-        if ( VideoIsStereo )
-        {
+        if ( VideoIsStereo ) {
             return;
         }
 
@@ -895,8 +897,9 @@ public class ARController : MonoBehaviour
         {
 
             Camera camera = item.GetComponent<Camera>();
-            if ( camera == null )
+            if ( camera == null ) {
                 break;
+            }
 
             camera.projectionMatrix = DeviceRotation * _videoProjectionMatrix0;
             camera.pixelRect = getViewport(_videoWidth0, _videoHeight0, false, ARCamera.ViewEye.Left);
