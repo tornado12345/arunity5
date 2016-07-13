@@ -184,6 +184,7 @@ public class ARController : MonoBehaviour
     public bool ContentFlipH = false;
     public bool ContentFlipV = false;
     public ContentAlign ContentAlign = ContentAlign.Center;
+    public Matrix4x4 DeviceRotation = Matrix4x4.identity;
 
     //private int _frameStatsCount = 0;
     //private float _frameStatsTimeUpdateTexture = 0.0f;
@@ -638,7 +639,13 @@ public class ARController : MonoBehaviour
         // Remaining Unity setup happens in UpdateAR().
         return true;
     }
-    
+
+    private ScreenOrientation deviceOrientation = ScreenOrientation.Unknown;
+#if UNITY_ANDROID
+    private int screenWidth = 0;
+    private int screenHeight = 0;
+#endif
+
     bool UpdateAR()
     {
         if (!_running) {
@@ -646,7 +653,13 @@ public class ARController : MonoBehaviour
         }
         
         if (!_sceneConfiguredForVideo) {
-            
+
+            deviceOrientation = Screen.orientation;
+#if UNITY_ANDROID
+            screenWidth = Screen.width;
+            screenHeight = Screen.height;
+#endif
+
             // Wait for the wrapper to confirm video frames have arrived before configuring our video-dependent stuff.
             if (!PluginFunctions.arwIsRunning()) {
                 if (!_sceneConfiguredForVideoWaitingMessageLogged) {
@@ -748,11 +761,23 @@ public class ARController : MonoBehaviour
                     }
                 }
 
+                UpdateVideoTexture();
+
                 Log (LogTag + "Scene configured for video.");
                 _sceneConfiguredForVideo = true;     
             } // !running
         } // !sceneConfiguredForVideo
-        
+
+#if UNITY_IOS
+        if ( Screen.orientation != deviceOrientation )
+            UpdateVideoTexture();
+#elif UNITY_ANDROID
+        if ( ( Screen.width != screenWidth ) || ( Screen.height != screenHeight ) )
+            UpdateVideoTexture();
+        else if ( Screen.orientation != deviceOrientation )
+            screenWidth = screenHeight = 0;  //force video texture update on next pass
+#endif
+
         bool gotFrame = PluginFunctions.arwCapture();
         bool ok = PluginFunctions.arwUpdateAR();
         if (!ok) return false;
@@ -811,6 +836,64 @@ public class ARController : MonoBehaviour
             ContentFlipV = true;
             ContentFlipH = (!cameraIsFrontFacing);
         }
+    }
+
+    public void UpdateVideoTexture()
+    {
+
+#if !UNITY_EDITOR
+        deviceOrientation = Screen.orientation;
+#if UNITY_ANDROID
+        screenWidth = Screen.width;
+        screenHeight = Screen.height;
+#endif
+
+        switch ( deviceOrientation )
+        {
+
+        case ScreenOrientation.Portrait:
+            DeviceRotation = Matrix4x4.TRS(Vector3.zero, Quaternion.AngleAxis(90.0f, Vector3.back), Vector3.one);
+            _videoBackgroundCameraGO0.transform.localRotation = Quaternion.AngleAxis(-90.0f, Vector3.back);
+            break;
+
+        case ScreenOrientation.PortraitUpsideDown:
+            DeviceRotation = Matrix4x4.TRS(Vector3.zero, Quaternion.AngleAxis(-90.0f, Vector3.back), Vector3.one);
+            _videoBackgroundCameraGO0.transform.localRotation = Quaternion.AngleAxis(90.0f, Vector3.back);
+            break;
+
+        case ScreenOrientation.LandscapeLeft:
+            DeviceRotation = Matrix4x4.identity;
+            _videoBackgroundCameraGO0.transform.localRotation = Quaternion.identity;
+            break;
+
+        case ScreenOrientation.LandscapeRight:
+            DeviceRotation = Matrix4x4.TRS(Vector3.zero, Quaternion.AngleAxis(180.0f, Vector3.back), Vector3.one);
+            _videoBackgroundCameraGO0.transform.localRotation = Quaternion.AngleAxis(180.0f, Vector3.back);
+            break;
+
+        case ScreenOrientation.Unknown:
+        default:
+            // unsupported display orientation: do nothing
+            break;
+
+        }
+
+        _videoBackgroundCamera0.pixelRect = getViewport(_videoWidth0, _videoHeight0, false, ARCamera.ViewEye.Left);
+
+        ARCamera[] list = FindObjectsOfType<ARCamera>();
+        foreach (ARCamera item in list)
+        {
+
+            Camera camera = item.GetComponent<Camera>();
+            if ( camera == null )
+                break;
+
+            camera.projectionMatrix = DeviceRotation * _videoProjectionMatrix0;
+            camera.pixelRect = getViewport(_videoWidth0, _videoHeight0, false, ARCamera.ViewEye.Left);
+
+        }
+#endif
+
     }
 
     public void SetVideoAlpha(float a)
@@ -1474,6 +1557,20 @@ public class ARController : MonoBehaviour
                 int contentHeightFinalOrientation = (ContentRotate90 ? contentWidth : contentHeight);
                 if (ContentMode == ContentMode.Fit || ContentMode == ContentMode.Fill) {
                     float scaleRatioWidth, scaleRatioHeight, scaleRatio;
+#if !UNITY_EDITOR
+#if UNITY_IOS || UNITY_ANDROID
+                    if ( ( deviceOrientation == ScreenOrientation.Portrait ) || ( deviceOrientation == ScreenOrientation.PortraitUpsideDown ) )
+                    {
+                        contentWidthFinalOrientation = Math.Min(contentWidth, contentHeight);
+                        contentHeightFinalOrientation = Math.Max(contentHeight, contentWidth);
+                    }
+                    else if ( ( deviceOrientation == ScreenOrientation.LandscapeLeft ) || ( deviceOrientation == ScreenOrientation.LandscapeRight ) )
+                    {
+                        contentWidthFinalOrientation = Math.Max(contentWidth, contentHeight);
+                        contentHeightFinalOrientation = Math.Min(contentHeight, contentWidth);
+                    }
+#endif
+#endif
                     scaleRatioWidth = (float)backingWidth / (float)contentWidthFinalOrientation;
                     scaleRatioHeight = (float)backingHeight / (float)contentHeightFinalOrientation;
                     if (ContentMode == ContentMode.Fill) scaleRatio = Math.Max(scaleRatioHeight, scaleRatioWidth);
